@@ -309,8 +309,7 @@ impl crate::TermWindow {
 
         // Reserve space for the native titlebar buttons
         if self
-            .config
-            .window_decorations
+            .effective_window_decorations()
             .contains(::window::WindowDecorations::INTEGRATED_BUTTONS)
             && self.config.integrated_title_button_style == IntegratedTitleButtonStyle::MacOsNative
             && !self.window_state.contains(window::WindowState::FULL_SCREEN)
@@ -367,8 +366,7 @@ impl crate::TermWindow {
         }
 
         let window_buttons_at_left = self
-            .config
-            .window_decorations
+            .effective_window_decorations()
             .contains(window::WindowDecorations::INTEGRATED_BUTTONS)
             && (self.config.integrated_title_button_alignment
                 == IntegratedTitleButtonAlignment::Left

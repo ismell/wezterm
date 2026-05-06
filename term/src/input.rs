@@ -79,10 +79,11 @@ impl LastMouseClick {
 
     pub fn add(&self, button: MouseButton, position: ClickPosition) -> Self {
         let now = Instant::now();
+        let dur = now.duration_since(self.time);
         let streak = if button == self.button
-            && position.column == self.position.column
-            && position.row == self.position.row
-            && now.duration_since(self.time) <= Duration::from_millis(CLICK_INTERVAL)
+            && position.column.abs_diff(self.position.column) <= 1
+            && position.row.abs_diff(self.position.row) <= 1
+            && dur <= Duration::from_millis(CLICK_INTERVAL)
         {
             self.streak + 1
         } else {
@@ -94,5 +95,47 @@ impl LastMouseClick {
             time: now,
             streak,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_forgiving_double_click() {
+        let click = LastMouseClick::new(
+            MouseButton::Left,
+            ClickPosition {
+                column: 10,
+                row: 5,
+                x_pixel_offset: 0,
+                y_pixel_offset: 0,
+            },
+        );
+
+        // 1 cell away should count as a streak
+        let streak = click.add(
+            MouseButton::Left,
+            ClickPosition {
+                column: 11,
+                row: 6,
+                x_pixel_offset: 0,
+                y_pixel_offset: 0,
+            },
+        );
+        assert_eq!(streak.streak, 2);
+
+        // 2 cells away should reset the streak
+        let reset = click.add(
+            MouseButton::Left,
+            ClickPosition {
+                column: 12,
+                row: 5,
+                x_pixel_offset: 0,
+                y_pixel_offset: 0,
+            },
+        );
+        assert_eq!(reset.streak, 1);
     }
 }

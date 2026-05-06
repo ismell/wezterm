@@ -11,6 +11,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::os::wayland::frame::WeztermFrame;
 use anyhow::{anyhow, bail};
 use async_io::Timer;
 use async_trait::async_trait;
@@ -28,7 +29,6 @@ use smithay_client_toolkit::reexports::csd_frame::{
 };
 use smithay_client_toolkit::reexports::protocols::xdg::shell::client::xdg_toplevel::ResizeEdge as XdgResizeEdge;
 use smithay_client_toolkit::seat::pointer::CursorIcon;
-use smithay_client_toolkit::shell::xdg::fallback_frame::FallbackFrame;
 use smithay_client_toolkit::shell::xdg::window::{
     DecorationMode, Window as XdgWindow, WindowConfigure, WindowDecorations as Decorations,
     WindowHandler,
@@ -260,7 +260,7 @@ impl WaylandWindow {
             let wayland_state = &conn.wayland_state.borrow();
             let shm = &wayland_state.shm;
             let subcompositor = wayland_state.subcompositor.clone();
-            FallbackFrame::new(&window, shm, subcompositor, qh.clone())
+            WeztermFrame::new(&window, shm, subcompositor, qh.clone())
                 .expect("failed to create csd frame")
         };
         let hidden = match decor_mode {
@@ -323,6 +323,8 @@ impl WaylandWindow {
 
             text_cursor: None,
             appearance,
+            current_cursor: None,
+            force_csd: false,
 
             config,
 
@@ -354,6 +356,13 @@ impl WaylandWindow {
 
 #[async_trait(?Send)]
 impl WindowOps for WaylandWindow {
+    fn request_drag_move(&self) {
+        WaylandConnection::with_window_inner(self.0, |inner| {
+            inner.request_drag_move()?;
+            Ok(())
+        });
+    }
+
     fn show(&self) {
         WaylandConnection::with_window_inner(self.0, |inner| {
             inner.show();
@@ -568,7 +577,7 @@ pub struct WaylandWindowInner {
     surface_factor: f64,
     copy_and_paste: Arc<Mutex<CopyAndPaste>>,
     window: Option<XdgWindow>,
-    pub(super) window_frame: FallbackFrame<WaylandState>,
+    pub(super) window_frame: WeztermFrame<WaylandState>,
     dimensions: Dimensions,
     resize_increments: Option<ResizeIncrement>,
     window_state: WindowState,
@@ -587,6 +596,8 @@ pub struct WaylandWindowInner {
     // font_config: Rc<FontConfiguration>,
     text_cursor: Option<Rect>,
     appearance: Appearance,
+    pub(crate) current_cursor: Option<MouseCursor>,
+    pub(crate) force_csd: bool,
     config: ConfigHandle,
     // cache the title for comparison to avoid spamming
     // the compositor with updates that don't actually change it
@@ -599,6 +610,22 @@ pub struct WaylandWindowInner {
 }
 
 impl WaylandWindowInner {
+    pub(crate) fn request_drag_move(&mut self) -> anyhow::Result<()> {
+        let conn = Connection::get().unwrap();
+        let wayland = conn.wayland();
+        let state = wayland.wayland_state.borrow();
+        if let (Some(window), Some(pointer)) = (self.window.as_ref(), state.pointer.as_ref()) {
+            let serial = *state.last_serial.borrow();
+            let pointer_data = pointer
+                .pointer()
+                .data::<super::pointer::PointerUserData>()
+                .unwrap();
+            let seat = pointer_data.pdata.seat();
+            window.move_(seat, serial);
+        }
+        Ok(())
+    }
+
     fn close(&mut self) {
         self.events.dispatch(WindowEvent::Destroyed);
         self.window.take();
@@ -841,6 +868,21 @@ impl WaylandWindowInner {
             self.window_frame.update_state(window_config.state);
             self.window_frame
                 .update_wm_capabilities(window_config.capabilities);
+
+            let using_client_decorations =
+                matches!(window_config.decoration_mode, DecorationMode::Client);
+            if using_client_decorations
+                && !self.force_csd
+                && self.config.window_decorations
+                    == WindowDecorations::TITLE | WindowDecorations::RESIZE
+            {
+                log::debug!(
+                    "Wayland compositor requested Client decorations, forcing CSD fallback."
+                );
+                self.force_csd = true;
+                self.window_frame.set_hidden(false);
+                self.events.dispatch(WindowEvent::NeedCsd);
+            }
         }
 
         if let Some((mut w, mut h)) = pending.configure.take() {
@@ -907,9 +949,9 @@ impl WaylandWindowInner {
                     self.events.dispatch(WindowEvent::Resized {
                         dimensions: self.dimensions,
                         window_state: self.window_state,
-                        // We don't know if we're live resizing or not, so
-                        // assume no.
-                        live_resizing: false,
+                        // Wayland resizing is generally synchronous from the compositor's perspective.
+                        // We set this to true to ensure immediate paints to avoid WebGpu swapchain freezes.
+                        live_resizing: true,
                     });
                     // Avoid blurring by matching the scaling factor of the
                     // compositor; if it is going to double the size then
@@ -962,6 +1004,7 @@ impl WaylandWindowInner {
     }
 
     fn set_cursor(&mut self, cursor: Option<MouseCursor>) {
+        self.current_cursor = cursor;
         if !PendingMouse::in_window(&self.pending_mouse) {
             return;
         }

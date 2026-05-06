@@ -337,6 +337,7 @@ impl TabBarState {
         pane_info: &[PaneInformation],
         colors: Option<&TabBarColors>,
         config: &ConfigHandle,
+        effective_window_decorations: window::WindowDecorations,
         left_status: &str,
         right_status: &str,
     ) -> Self {
@@ -365,9 +366,8 @@ impl TabBarState {
             },
         );
 
-        let use_integrated_title_buttons = config
-            .window_decorations
-            .contains(window::WindowDecorations::INTEGRATED_BUTTONS);
+        let use_integrated_title_buttons =
+            effective_window_decorations.contains(window::WindowDecorations::INTEGRATED_BUTTONS);
 
         // We ultimately want to produce a line looking like this:
         // ` | tab1-title x | tab2-title x |  +      . - X `
