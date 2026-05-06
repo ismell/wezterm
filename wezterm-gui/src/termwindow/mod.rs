@@ -421,6 +421,8 @@ pub struct TermWindow {
     /// The URL over which we are currently hovering
     current_highlight: Option<Arc<Hyperlink>>,
 
+    force_csd: bool,
+
     quad_generation: usize,
     shape_generation: usize,
     shape_cache: RefCell<LfuCache<ShapeCacheKey, anyhow::Result<Rc<Vec<ShapedInfo>>>>>,
@@ -466,6 +468,14 @@ pub struct TermWindow {
 }
 
 impl TermWindow {
+    pub fn effective_window_decorations(&self) -> window::WindowDecorations {
+        if self.force_csd {
+            window::WindowDecorations::INTEGRATED_BUTTONS | window::WindowDecorations::RESIZE
+        } else {
+            self.config.window_decorations
+        }
+    }
+
     fn load_os_parameters(&mut self) {
         if let Some(ref window) = self.window {
             self.os_parameters = match window.get_os_parameters(&self.config, self.window_state) {
@@ -529,7 +539,6 @@ impl TermWindow {
         self.load_os_parameters();
 
         if self.focused.is_none() {
-            self.last_mouse_click = None;
             self.current_mouse_buttons.clear();
             self.current_mouse_capture = None;
             self.is_click_to_focus_window = false;
@@ -726,6 +735,8 @@ impl TermWindow {
             current_mouse_capture: None,
             last_mouse_click: None,
             current_highlight: None,
+            force_csd: false,
+
             quad_generation: 0,
             shape_generation: 0,
             shape_cache: RefCell::new(LfuCache::new(
@@ -948,6 +959,13 @@ impl TermWindow {
             }
             WindowEvent::MouseLeave => {
                 self.mouse_leave_impl(window);
+                Ok(true)
+            }
+            WindowEvent::NeedCsd => {
+                log::debug!("Received NeedCsd, enabling CSD fallback in GUI.");
+                self.force_csd = true;
+                self.update_title();
+                window.invalidate();
                 Ok(true)
             }
             WindowEvent::Resized {
@@ -1999,6 +2017,7 @@ impl TermWindow {
             &panes,
             self.config.resolved_palette.tab_bar.as_ref(),
             &self.config,
+            self.effective_window_decorations(),
             &self.left_status,
             &self.right_status,
         );

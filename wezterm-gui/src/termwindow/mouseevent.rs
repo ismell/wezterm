@@ -159,6 +159,8 @@ impl super::TermWindow {
 
             WMEK::Move => {
                 if let Some(start) = self.window_drag_position.as_ref() {
+                    context.request_drag_move();
+
                     // Dragging the window
                     // Compute the distance since the initial event
                     let delta_x = start.screen_coords.x - event.screen_coords.x;
@@ -245,7 +247,14 @@ impl super::TermWindow {
     }
 
     pub fn mouse_leave_impl(&mut self, context: &dyn WindowOps) {
+        if let Some(prior) = self.last_ui_item.take() {
+            self.leave_ui_item(&prior);
+        }
         self.current_mouse_event = None;
+        self.window_drag_position = None;
+        self.dragging = None;
+        self.current_mouse_capture = None;
+        self.current_mouse_buttons.clear();
         self.update_title();
         context.set_cursor(Some(MouseCursor::Arrow));
         context.invalidate();
@@ -472,8 +481,9 @@ impl super::TermWindow {
                         .window_state
                         .intersects(WindowState::MAXIMIZED | WindowState::FULL_SCREEN);
                     if let Some(ref window) = self.window {
-                        if self.config.window_decorations
-                            == WindowDecorations::INTEGRATED_BUTTONS | WindowDecorations::RESIZE
+                        if self
+                            .effective_window_decorations()
+                            .contains(WindowDecorations::INTEGRATED_BUTTONS)
                         {
                             if self.last_mouse_click.as_ref().map(|c| c.streak) == Some(2) {
                                 if maximized {
@@ -481,6 +491,7 @@ impl super::TermWindow {
                                 } else {
                                     window.maximize();
                                 }
+                                return;
                             }
                         }
                     }
@@ -488,7 +499,6 @@ impl super::TermWindow {
                     if !maximized {
                         self.window_drag_position.replace(event.clone());
                     }
-                    context.request_drag_move();
                 }
                 TabBarItem::WindowButton(button) => {
                     use window::IntegratedTitleButton as Button;

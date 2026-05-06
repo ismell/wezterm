@@ -206,6 +206,9 @@ pub enum WindowEvent {
     // Called when the files are dropped into the window
     DroppedFile(Vec<PathBuf>),
 
+    // Called when the Wayland compositor forces CSD
+    NeedCsd,
+
     // Called when urls are dropped into the window
     DroppedUrl(Vec<Url>),
 

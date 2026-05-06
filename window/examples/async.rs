@@ -89,7 +89,8 @@ impl MyWindow {
             | WindowEvent::DroppedString(_)
             | WindowEvent::PerformKeyAssignment(_)
             | WindowEvent::MouseLeave
-            | WindowEvent::SetInnerSizeCompleted => {}
+            | WindowEvent::SetInnerSizeCompleted
+            | WindowEvent::NeedCsd => {}
         }
     }
 }
