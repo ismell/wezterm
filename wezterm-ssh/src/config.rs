@@ -123,14 +123,18 @@ impl MatchGroup {
                     cmd = cmd.replace("%u", local_user);
                     let port = target.get("port").map(|s| s.as_str()).unwrap_or("22");
                     cmd = cmd.replace("%p", port);
-                    
+
                     #[cfg(windows)]
                     let shell = ("cmd.exe", "/c");
                     #[cfg(not(windows))]
                     let shell = ("sh", "-c");
 
                     log::trace!("Evaluating Match Exec: {}", cmd);
-                    match std::process::Command::new(shell.0).arg(shell.1).arg(&cmd).status() {
+                    match std::process::Command::new(shell.0)
+                        .arg(shell.1)
+                        .arg(&cmd)
+                        .status()
+                    {
                         Ok(status) => {
                             if !status.success() {
                                 return false;
@@ -572,13 +576,6 @@ impl Config {
             }
         }
 
-        if needs_reparse {
-            log::debug!(
-                "ssh configuration uses options that require two-phase \
-                parsing, which isn't supported"
-            );
-        }
-
         let mut token_map = self.tokens.clone();
         token_map.insert("%h".to_string(), host.to_string());
         result
@@ -589,6 +586,30 @@ impl Config {
                 }
             })
             .or_insert_with(|| host.to_string());
+
+        if needs_reparse {
+            let canonical_hostname = result["hostname"].clone();
+            for config in &self.config_files {
+                config.apply_matches(
+                    &canonical_hostname,
+                    target_user,
+                    &local_user,
+                    Context::Canonical,
+                    &mut result,
+                );
+            }
+            let final_hostname = result["hostname"].clone();
+            for config in &self.config_files {
+                config.apply_matches(
+                    &final_hostname,
+                    target_user,
+                    &local_user,
+                    Context::Final,
+                    &mut result,
+                );
+            }
+        }
+
         token_map.insert("%h".to_string(), result["hostname"].to_string());
         token_map.insert("%n".to_string(), host.to_string());
         token_map.insert("%r".to_string(), target_user.to_string());
@@ -661,9 +682,16 @@ impl Config {
     /// Returns a set of tokens that should be expanded for a given option name
     fn should_expand_tokens(&self, key: &str) -> Option<&[&str]> {
         match key {
-            "certificatefile" | "controlpath" | "identityagent" | "identityfile"
-            | "localforward" | "remotecommand" | "remoteforward" | "userknownkostsfile"
-            | "userknownhostsfile" | "globalknownhostsfile" => {
+            "certificatefile"
+            | "controlpath"
+            | "identityagent"
+            | "identityfile"
+            | "localforward"
+            | "remotecommand"
+            | "remoteforward"
+            | "userknownkostsfile"
+            | "userknownhostsfile"
+            | "globalknownhostsfile" => {
                 Some(&["%C", "%d", "%h", "%i", "%L", "%l", "%n", "%p", "%r", "%u"])
             }
             "hostname" => Some(&["%h"]),

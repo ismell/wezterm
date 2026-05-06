@@ -197,7 +197,9 @@ impl SessionInner {
         }
         if let Some(gkh) = self.config.get("globalknownhostsfile") {
             for file in gkh.split_whitespace() {
-                sess.set_option(libssh_rs::SshOption::GlobalKnownHosts(Some(file.to_string())))?;
+                sess.set_option(libssh_rs::SshOption::GlobalKnownHosts(Some(
+                    file.to_string(),
+                )))?;
                 break;
             }
         }
