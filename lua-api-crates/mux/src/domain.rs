@@ -74,6 +74,54 @@ impl UserData for MuxDomain {
             Ok(domain.domain_label().await)
         });
 
+        methods.add_async_method(
+            "add_port_forward",
+            |_, this, args: mlua::Table| async move {
+                let mux = get_mux()?;
+                let domain = this.resolve(&mux)?;
+
+                let typ: String = args.get("type")?;
+
+                let pf = match typ.as_str() {
+                    "local" => {
+                        let local_host: String = args.get("local_host")?;
+                        let local_port: u16 = args.get("local_port")?;
+                        let remote_host: String = args.get("remote_host")?;
+                        let remote_port: u16 = args.get("remote_port")?;
+                        wezterm_ssh::PortForward::Local {
+                            local_host,
+                            local_port,
+                            remote_host,
+                            remote_port,
+                        }
+                    }
+                    "remote" => {
+                        let remote_host: Option<String> = args.get("remote_host")?;
+                        let remote_port: u16 = args.get("remote_port")?;
+                        let local_host: String = args.get("local_host")?;
+                        let local_port: u16 = args.get("local_port")?;
+                        wezterm_ssh::PortForward::Remote {
+                            remote_host,
+                            remote_port,
+                            local_host,
+                            local_port,
+                        }
+                    }
+                    _ => return Err(mlua::Error::external("Invalid forward type")),
+                };
+
+                if let Some(ssh_dom) = domain.downcast_ref::<mux::ssh::RemoteSshDomain>() {
+                    let addr = ssh_dom
+                        .add_port_forward(pf)
+                        .await
+                        .map_err(|e| mlua::Error::external(format!("{:#}", e)))?;
+                    Ok(addr.to_string())
+                } else {
+                    Err(mlua::Error::external("Domain is not an SSH domain"))
+                }
+            },
+        );
+
         methods.add_method("has_any_panes", |_, this, _: ()| {
             let mux = get_mux()?;
             let domain = this.resolve(&mux)?;

@@ -77,3 +77,22 @@ example shows how to specify the private key to use when connecting to
 wezterm ssh -oIdentityFile=/secret/id_ed25519 some-host
 ```
 
+### Port Forwarding
+
+{{since('nightly')}}
+
+wezterm now supports SSH port forwarding. You can specify it via command line arguments when using `wezterm connect`:
+
+```bash
+wezterm connect my-host -L 5555:localhost:5555 -R 9999:localhost:9999
+```
+
+Or via the `SshDomain` configuration in your `~/.wezterm.lua`. See [SshDomain](config/lua/SshDomain.md) for more details.
+
+You can also add port forwards at runtime using the Debug Overlay (Lua REPL):
+
+```lua
+local domain = wezterm.mux.get_domain("my-ssh-domain")
+domain:add_port_forward({type="local", local_address="127.0.0.1:5555", remote_address="localhost:5555"})
+```
+

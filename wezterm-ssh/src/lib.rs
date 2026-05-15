@@ -6,6 +6,7 @@ mod channelwrap;
 mod config;
 mod dirwrap;
 mod filewrap;
+mod forward;
 mod host;
 mod pty;
 mod session;
@@ -16,6 +17,7 @@ mod sftpwrap;
 
 pub use auth::*;
 pub use config::*;
+pub use forward::*;
 pub use host::*;
 pub use pty::*;
 pub use session::*;

@@ -23,7 +23,7 @@ use termwiz::render::terminfo::TerminfoRenderer;
 use termwiz::surface::{Change, LineAttribute};
 use termwiz::terminal::{ScreenSize, Terminal, TerminalWaker};
 use wezterm_ssh::{
-    ConfigMap, HostVerificationFailed, Session, SessionEvent, SshChildProcess, SshPty,
+    ConfigMap, HostVerificationFailed, PortForward, Session, SessionEvent, SshChildProcess, SshPty,
 };
 use wezterm_term::TerminalSize;
 
@@ -387,6 +387,8 @@ impl RemoteSshDomain {
         // to perform the blocking (from its perspective) terminal
         // UI to carry out any authentication.
         let mut stdout_write = BufWriter::new(stdout_write);
+        let local_forwards = self.dom.local_forward.clone();
+        let remote_forwards = self.dom.remote_forward.clone();
         std::thread::spawn(move || {
             if let Err(err) = connect_ssh_session(
                 session,
@@ -400,6 +402,8 @@ impl RemoteSshDomain {
                 size,
                 command_line,
                 env,
+                local_forwards,
+                remote_forwards,
             ) {
                 let _ = write!(stdout_write, "{:#}", err);
                 log::error!("Failed to connect ssh: {:#}", err);
@@ -430,6 +434,8 @@ fn connect_ssh_session(
     size: Arc<Mutex<TerminalSize>>,
     command_line: Option<String>,
     env: HashMap<String, String>,
+    local_forwards: Vec<config::PortForwardConfig>,
+    remote_forwards: Vec<config::PortForwardConfig>,
 ) -> anyhow::Result<()> {
     struct StdoutShim<'a> {
         size: Arc<Mutex<TerminalSize>>,
@@ -648,7 +654,38 @@ fn connect_ssh_session(
             }
             SessionEvent::Authenticated => {
                 // Our session has been authenticated: we can now
-                // set up the real pty for the pane
+                // set up port forwarding and the real pty for the pane
+
+                for forward in local_forwards {
+                    match wezterm_ssh::PortForward::new_local(
+                        &forward.local_address,
+                        &forward.remote_address,
+                    ) {
+                        Ok(pf) => {
+                            if let Err(err) = smol::block_on(session.add_port_forward(pf)) {
+                                log::error!("Failed to add local forward: {:#}", err);
+                            }
+                        }
+                        Err(err) => {
+                            log::error!("Invalid local forward config: {}", err);
+                        }
+                    }
+                }
+                for forward in remote_forwards {
+                    match wezterm_ssh::PortForward::new_remote(
+                        &forward.local_address,
+                        &forward.remote_address,
+                    ) {
+                        Ok(pf) => {
+                            if let Err(err) = smol::block_on(session.add_port_forward(pf)) {
+                                log::error!("Failed to add remote forward: {:#}", err);
+                            }
+                        }
+                        Err(err) => {
+                            log::error!("Invalid remote forward config: {}", err);
+                        }
+                    }
+                }
                 match smol::block_on(session.request_pty(
                     &config::configuration().term,
                     crate::terminal_size_to_pty_size(*size.lock().unwrap())?,
@@ -695,6 +732,21 @@ fn connect_ssh_session(
     }
 
     Ok(())
+}
+
+impl RemoteSshDomain {
+    pub async fn add_port_forward(
+        &self,
+        forward: PortForward,
+    ) -> anyhow::Result<std::net::SocketAddr> {
+        let session = self
+            .session
+            .lock()
+            .map_err(|e| anyhow::anyhow!("mutex poisoned: {}", e))?
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("session not connected"))?;
+        session.add_port_forward(forward).await
+    }
 }
 
 #[async_trait(?Send)]

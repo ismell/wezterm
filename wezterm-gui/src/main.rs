@@ -470,6 +470,94 @@ async fn async_run_terminal_gui(
             };
 
             domain.attach(Some(window_id)).await?;
+
+            if let Some(ssh_dom) = domain.downcast_ref::<mux::ssh::RemoteSshDomain>() {
+                for forward in &opts.local_forward {
+                    let parts: Vec<&str> = forward.split(':').collect();
+                    match parts.len() {
+                        3 => {
+                            if let (Ok(local_port), Ok(remote_port)) =
+                                (parts[0].parse::<u16>(), parts[2].parse::<u16>())
+                            {
+                                let pf = wezterm_ssh::PortForward::Local {
+                                    local_host: "127.0.0.1".to_string(),
+                                    local_port,
+                                    remote_host: parts[1].to_string(),
+                                    remote_port,
+                                };
+                                if let Err(err) = ssh_dom.add_port_forward(pf).await {
+                                    log::error!("Failed to add CLI local forward: {:#}", err);
+                                }
+                            } else {
+                                log::error!("Invalid ports in local forward: {}", forward);
+                            }
+                        }
+                        4 => {
+                            if let (Ok(local_port), Ok(remote_port)) =
+                                (parts[1].parse::<u16>(), parts[3].parse::<u16>())
+                            {
+                                let pf = wezterm_ssh::PortForward::Local {
+                                    local_host: parts[0].to_string(),
+                                    local_port,
+                                    remote_host: parts[2].to_string(),
+                                    remote_port,
+                                };
+                                if let Err(err) = ssh_dom.add_port_forward(pf).await {
+                                    log::error!("Failed to add CLI local forward: {:#}", err);
+                                }
+                            } else {
+                                log::error!("Invalid ports in local forward: {}", forward);
+                            }
+                        }
+                        _ => {
+                            log::error!("Invalid local forward format: {}. Expected [bind_address:]port:host:hostport", forward);
+                        }
+                    }
+                }
+                for forward in &opts.remote_forward {
+                    let parts: Vec<&str> = forward.split(':').collect();
+                    match parts.len() {
+                        3 => {
+                            if let (Ok(remote_port), Ok(local_port)) =
+                                (parts[0].parse::<u16>(), parts[2].parse::<u16>())
+                            {
+                                let pf = wezterm_ssh::PortForward::Remote {
+                                    remote_host: None,
+                                    remote_port,
+                                    local_host: parts[1].to_string(),
+                                    local_port,
+                                };
+                                if let Err(err) = ssh_dom.add_port_forward(pf).await {
+                                    log::error!("Failed to add CLI remote forward: {:#}", err);
+                                }
+                            } else {
+                                log::error!("Invalid ports in remote forward: {}", forward);
+                            }
+                        }
+                        4 => {
+                            if let (Ok(remote_port), Ok(local_port)) =
+                                (parts[1].parse::<u16>(), parts[3].parse::<u16>())
+                            {
+                                let pf = wezterm_ssh::PortForward::Remote {
+                                    remote_host: Some(parts[0].to_string()),
+                                    remote_port,
+                                    local_host: parts[2].to_string(),
+                                    local_port,
+                                };
+                                if let Err(err) = ssh_dom.add_port_forward(pf).await {
+                                    log::error!("Failed to add CLI remote forward: {:#}", err);
+                                }
+                            } else {
+                                log::error!("Invalid ports in remote forward: {}", forward);
+                            }
+                        }
+                        _ => {
+                            log::error!("Invalid remote forward format: {}. Expected [bind_address:]port:host:hostport", forward);
+                        }
+                    }
+                }
+            }
+
             let config = config::configuration();
             let dpi = config.dpi.unwrap_or_else(|| ::window::default_dpi());
             let tab = domain
@@ -1269,6 +1357,8 @@ fn run() -> anyhow::Result<()> {
                 _cmd: false,
                 no_auto_connect: false,
                 cwd: None,
+                local_forward: connect.local_forward,
+                remote_forward: connect.remote_forward,
             },
             Some(connect.domain_name),
         ),

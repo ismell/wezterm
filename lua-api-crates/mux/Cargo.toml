@@ -20,4 +20,5 @@ termwiz-funcs.workspace = true
 termwiz.workspace = true
 url-funcs.workspace = true
 wezterm-dynamic.workspace = true
+wezterm-ssh.workspace = true
 wezterm-term.workspace = true

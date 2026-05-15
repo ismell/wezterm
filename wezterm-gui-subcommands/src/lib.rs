@@ -101,6 +101,16 @@ pub struct StartCommand {
     #[arg(long, requires = "domain")]
     pub attach: bool,
 
+    /// Request local port forwarding.
+    /// Format: `localport:remotehost:remoteport`
+    #[arg(short = 'L', long = "local-forward", number_of_values = 1)]
+    pub local_forward: Vec<String>,
+
+    /// Request remote port forwarding.
+    /// Format: `remoteport:localhost:localport`
+    #[arg(short = 'R', long = "remote-forward", number_of_values = 1)]
+    pub remote_forward: Vec<String>,
+
     /// Instead of executing your shell, run PROG.
     /// For example: `wezterm start -- bash -l` will spawn bash
     /// as if it were a login shell. [aliases: -e]
@@ -206,6 +216,16 @@ pub struct ConnectCommand {
     /// Name of the multiplexer domain section from the configuration
     /// to which you'd like to connect
     pub domain_name: String,
+
+    /// Request local port forwarding.
+    /// Format: `localport:remotehost:remoteport`
+    #[arg(short = 'L', long = "local-forward", number_of_values = 1)]
+    pub local_forward: Vec<String>,
+
+    /// Request remote port forwarding.
+    /// Format: `remoteport:localhost:localport`
+    #[arg(short = 'R', long = "remote-forward", number_of_values = 1)]
+    pub remote_forward: Vec<String>,
 
     /// When spawning into an existing GUI instance, spawn a new
     /// tab into the active window rather than spawn a new window.

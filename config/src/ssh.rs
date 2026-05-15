@@ -47,6 +47,12 @@ impl Default for Shell {
     }
 }
 
+#[derive(Debug, Clone, FromDynamic, ToDynamic, Default)]
+pub struct PortForwardConfig {
+    pub local_address: String,
+    pub remote_address: String,
+}
+
 #[derive(Default, Debug, Clone, FromDynamic, ToDynamic)]
 pub struct SshDomain {
     /// The name of this specific domain.  Must be unique amongst
@@ -104,6 +110,12 @@ pub struct SshDomain {
 
     #[dynamic(default)]
     pub assume_shell: Shell,
+
+    #[dynamic(default)]
+    pub local_forward: Vec<PortForwardConfig>,
+
+    #[dynamic(default)]
+    pub remote_forward: Vec<PortForwardConfig>,
 }
 impl_lua_conversion_dynamic!(SshDomain);
 

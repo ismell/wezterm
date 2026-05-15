@@ -1,5 +1,6 @@
 use crate::auth::*;
 use crate::config::ConfigMap;
+use crate::forward::*;
 use crate::host::*;
 use crate::pty::*;
 use crate::sessioninner::*;
@@ -58,6 +59,7 @@ pub(crate) enum SessionRequest {
     Exec(Exec, Sender<anyhow::Result<ExecResult>>),
     Sftp(SftpRequest),
     SignalChannel(SignalChannel),
+    AddPortForward(PortForward, Sender<anyhow::Result<std::net::SocketAddr>>),
     SessionDropped,
 }
 
@@ -123,6 +125,8 @@ impl Session {
             shown_accept_env_error: false,
             last_keep_alive: now,
             keep_alive,
+            local_listeners: vec![],
+            remote_forwards: HashMap::new(),
         };
         std::thread::spawn(move || inner.run());
         Ok((Self { tx: session_sender }, rx_event))
@@ -186,6 +190,18 @@ impl Session {
         Sftp {
             tx: self.tx.clone(),
         }
+    }
+
+    pub async fn add_port_forward(
+        &self,
+        forward: PortForward,
+    ) -> anyhow::Result<std::net::SocketAddr> {
+        let (reply, rx) = bounded(1);
+        self.tx
+            .send(SessionRequest::AddPortForward(forward, reply))
+            .await
+            .map_err(|_| DeadSession)?;
+        rx.recv().await?
     }
 }
 

@@ -132,3 +132,28 @@ example](pane/get_metadata.md).
 If you prefer to have the information overlaid on the content area, then
 you can set `overlay_lag_indicator = true`, but note that I'd like to
 remove that functionality in the future.
+
+{{since('nightly')}}
+
+You may now specify port forwarding for an ssh domain:
+
+```lua
+config.ssh_domains = {
+  {
+    name = 'my.server',
+    remote_address = '192.168.1.1',
+    
+    -- Request local port forwarding.
+    -- Traffic to local port 5555 will be forwarded to localhost:5555 on the remote host.
+    local_forward = {
+      { local_address = "127.0.0.1:5555", remote_address = "localhost:5555" },
+    },
+    
+    -- Request remote port forwarding.
+    -- Traffic to remote port 9999 will be forwarded to localhost:9999 on the local host.
+    remote_forward = {
+      { local_address = "localhost:9999", remote_address = "127.0.0.1:9999" },
+    },
+  },
+}
+```

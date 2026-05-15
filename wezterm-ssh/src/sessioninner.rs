@@ -2,6 +2,7 @@ use crate::channelwrap::ChannelWrap;
 use crate::config::ConfigMap;
 use crate::dirwrap::DirWrap;
 use crate::filewrap::FileWrap;
+use crate::forward::*;
 use crate::pty::*;
 use crate::session::{Exec, ExecResult, SessionEvent, SessionRequest, SignalChannel};
 use crate::sessionwrap::SessionWrap;
@@ -52,6 +53,8 @@ pub(crate) struct SessionInner {
     pub shown_accept_env_error: bool,
     pub last_keep_alive: Instant,
     pub keep_alive: Option<Duration>,
+    pub local_listeners: Vec<LocalForwardListener>,
+    pub remote_forwards: HashMap<u16, String>,
 }
 
 impl Drop for SessionInner {
@@ -462,6 +465,31 @@ impl SessionInner {
             self.dispatch_pending_requests(sess)?;
             self.connect_pending_agent_forward_channels(sess);
 
+            if let Some((port, channel)) = sess.channel_forward_accept() {
+                if let Some(target_addr) = self.remote_forwards.get(&port) {
+                    log::info!("Accepted remote forward connection for port {}", port);
+                    match std::net::TcpStream::connect(target_addr) {
+                        Ok(socket) => {
+                            if let Err(err) = self.add_net_channel(channel, socket) {
+                                log::error!(
+                                    "Failed to handle remote forward connection: {:#}",
+                                    err
+                                );
+                            }
+                        }
+                        Err(err) => {
+                            log::error!(
+                                "Failed to connect to local target {}: {:#}",
+                                target_addr,
+                                err
+                            );
+                        }
+                    }
+                } else {
+                    log::warn!("No target registered for remote forward port {}", port);
+                }
+            }
+
             if self.channels.is_empty() && self.session_was_dropped {
                 log::trace!(
                     "Stopping session loop as there are no more channels and Session was dropped"
@@ -502,6 +530,16 @@ impl SessionInner {
                 }
             }
 
+            let mut listener_mapping = vec![];
+            for (l_idx, listener) in self.local_listeners.iter().enumerate() {
+                poll_array.push(pollfd {
+                    fd: listener.listener.as_socket_descriptor(),
+                    events: POLLIN,
+                    revents: 0,
+                });
+                listener_mapping.push(l_idx);
+            }
+
             poll(&mut poll_array, Some(sleep_delay)).context("poll")?;
             sleep_delay += sleep_delay;
 
@@ -512,43 +550,71 @@ impl SessionInner {
                 if idx == 0 || idx == 1 {
                     // Dealt with at the top of the loop
                 } else if poll.revents != 0 {
-                    let (channel_id, fd_num) = mapping[idx - 2];
-                    let info = self.channels.get_mut(&channel_id).unwrap();
-                    let state = &mut info.descriptors[fd_num];
-                    let fd = state.fd.as_mut().unwrap();
+                    let idx_offset = idx - 2;
+                    if idx_offset < mapping.len() {
+                        let (channel_id, fd_num) = mapping[idx_offset];
+                        let info = self.channels.get_mut(&channel_id).unwrap();
+                        let state = &mut info.descriptors[fd_num];
+                        let fd = state.fd.as_mut().unwrap();
 
-                    if fd_num == 0 {
-                        // There's data we can read into the buffer
-                        match read_into_buf(fd, &mut state.buf) {
-                            Ok(_) => {}
-                            Err(err) => {
-                                log::debug!(
-                                    "error reading from channel {channel_id} stdin pipe: {:#}",
-                                    err
-                                );
-                                info.channel.close();
-                                state.fd.take();
-                            }
-                        }
-                    } else {
-                        if info.exited && state.buf.is_empty() {
-                            log::trace!("channel {channel_id} exited and we have no data to send to fd {fd_num}: close it!");
-                            state.fd.take();
-                        } else {
-                            // We can write our buffered output
-                            match write_from_buf(fd, &mut state.buf) {
+                        if fd_num == 0 {
+                            // There's data we can read into the buffer
+                            match read_into_buf(fd, &mut state.buf) {
                                 Ok(_) => {}
                                 Err(err) => {
                                     log::debug!(
-                                        "error while writing to channel {} fd {}: {:#}",
-                                        channel_id,
-                                        fd_num,
+                                        "error reading from channel {channel_id} stdin pipe: {:#}",
                                         err
                                     );
-
-                                    // Close it out
+                                    info.channel.close();
                                     state.fd.take();
                                 }
+                            }
+                        } else {
+                            if info.exited && state.buf.is_empty() {
+                                log::trace!("channel {channel_id} exited and we have no data to send to fd {fd_num}: close it!");
+                                state.fd.take();
+                            } else {
+                                // We can write our buffered output
+                                match write_from_buf(fd, &mut state.buf) {
+                                    Ok(_) => {}
+                                    Err(err) => {
+                                        log::debug!(
+                                            "error while writing to channel {} fd {}: {:#}",
+                                            channel_id,
+                                            fd_num,
+                                            err
+                                        );
+
+                                        // Close it out
+                                        state.fd.take();
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        let listener_idx = idx_offset - mapping.len();
+                        let l_idx = listener_mapping[listener_idx];
+                        let listener = &self.local_listeners[l_idx];
+                        let remote_host = listener.remote_host.clone();
+                        let remote_port = listener.remote_port;
+                        match listener.listener.accept() {
+                            Ok((socket, addr)) => {
+                                log::info!("Accepted connection from {} for forwarding", addr);
+                                if let Err(err) = self.handle_local_forward_connection(
+                                    sess,
+                                    socket,
+                                    &remote_host,
+                                    remote_port,
+                                ) {
+                                    log::error!(
+                                        "Failed to handle local forward connection: {:#}",
+                                        err
+                                    );
+                                }
+                            }
+                            Err(err) => {
+                                log::error!("Error accepting connection on listener: {:#}", err);
                             }
                         }
                     }
@@ -675,6 +741,11 @@ impl SessionInner {
                     SessionRequest::Exec(exec, reply) => {
                         dispatch(reply, || self.exec(sess, exec), "exec")
                     }
+                    SessionRequest::AddPortForward(forward, reply) => dispatch(
+                        reply,
+                        || self.add_port_forward(sess, forward),
+                        "AddPortForward",
+                    ),
                     SessionRequest::SignalChannel(info) => {
                         if let Err(err) = self.signal_channel(&info) {
                             log::error!("{:?} -> error: {:#}", info, err);
@@ -1015,6 +1086,129 @@ impl SessionInner {
         self.channels.insert(channel_id, info);
 
         Ok(result)
+    }
+
+    pub fn add_port_forward(
+        &mut self,
+        sess: &mut SessionWrap,
+        forward: PortForward,
+    ) -> anyhow::Result<std::net::SocketAddr> {
+        log::info!("add_port_forward: {:?}", forward);
+        let addr = match forward {
+            PortForward::Local {
+                local_host,
+                local_port,
+                remote_host,
+                remote_port,
+            } => {
+                let bind_addr = format!("{}:{}", local_host, local_port);
+                let listener = std::net::TcpListener::bind(&bind_addr)?;
+                let addr = listener.local_addr()?;
+                listener.set_nonblocking(true)?;
+                self.local_listeners.push(LocalForwardListener {
+                    listener,
+                    remote_host: remote_host.clone(),
+                    remote_port,
+                });
+                log::info!(
+                    "Listening on {} for forwarding to {}:{}",
+                    addr,
+                    remote_host,
+                    remote_port
+                );
+                addr
+            }
+            PortForward::Remote {
+                remote_host,
+                remote_port,
+                local_host,
+                local_port,
+            } => {
+                let bound_port =
+                    sess.channel_forward_listen(remote_port, remote_host.as_deref())?;
+
+                self.remote_forwards
+                    .insert(bound_port, format!("{}:{}", local_host, local_port));
+                log::info!(
+                    "Remote forwarding requested on port {}, forwarding to {}:{}",
+                    bound_port,
+                    local_host,
+                    local_port
+                );
+
+                std::net::SocketAddr::new(std::net::Ipv4Addr::new(0, 0, 0, 0).into(), bound_port)
+            }
+        };
+        Ok(addr)
+    }
+
+    fn handle_local_forward_connection(
+        &mut self,
+        sess: &mut SessionWrap,
+        socket: std::net::TcpStream,
+        host: &str,
+        port: u16,
+    ) -> anyhow::Result<()> {
+        sess.set_blocking(true);
+        let channel = sess.open_direct_tcpip(host, port, "127.0.0.1", 0);
+        sess.set_blocking(false);
+        let channel = channel?;
+
+        self.add_net_channel(channel, socket)
+    }
+
+    fn add_net_channel(
+        &mut self,
+        channel: ChannelWrap,
+        socket: std::net::TcpStream,
+    ) -> anyhow::Result<()> {
+        let channel_id = self.next_channel_id;
+        self.next_channel_id += 1;
+
+        socket.set_nonblocking(true)?;
+
+        let (read_fd, write_fd) = {
+            #[cfg(unix)]
+            {
+                use std::os::unix::io::IntoRawFd;
+                let fd = socket.into_raw_fd();
+                let fd_clone = unsafe { libc::dup(fd) };
+                (FileDescriptor::new(fd), FileDescriptor::new(fd_clone))
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::io::IntoRawSocket;
+                let socket_clone = socket.try_clone()?;
+                (
+                    FileDescriptor::new(socket.into_raw_socket()),
+                    FileDescriptor::new(socket_clone.into_raw_socket()),
+                )
+            }
+        };
+
+        let info = ChannelInfo {
+            channel_id,
+            channel,
+            exit: None,
+            exited: false,
+            descriptors: [
+                DescriptorState {
+                    fd: Some(read_fd),
+                    buf: VecDeque::with_capacity(8192),
+                },
+                DescriptorState {
+                    fd: Some(write_fd),
+                    buf: VecDeque::with_capacity(8192),
+                },
+                DescriptorState {
+                    fd: None,
+                    buf: VecDeque::new(),
+                },
+            ],
+        };
+
+        self.channels.insert(channel_id, info);
+        Ok(())
     }
 
     /// Open a handle to a file.
