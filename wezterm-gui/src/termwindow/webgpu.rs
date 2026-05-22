@@ -223,7 +223,17 @@ impl WebGpuState {
         dimensions: Dimensions,
         config: &ConfigHandle,
     ) -> anyhow::Result<Self> {
-        let backends = wgpu::Backends::all();
+        let mut backends = wgpu::Backends::all();
+        if let Ok(backend) = std::env::var("WGPU_BACKEND") {
+            match backend.to_lowercase().as_str() {
+                "vulkan" => backends = wgpu::Backends::VULKAN,
+                "gl" => backends = wgpu::Backends::GL,
+                "metal" => backends = wgpu::Backends::METAL,
+                "dx12" => backends = wgpu::Backends::DX12,
+                "webgpu" => backends = wgpu::Backends::BROWSER_WEBGPU,
+                _ => log::warn!("Unknown WGPU_BACKEND value: {}", backend),
+            }
+        }
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends,
             ..Default::default()
