@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
+use smithay_client_toolkit::activation::ActivationState;
 use smithay_client_toolkit::compositor::{CompositorState, SurfaceData};
 use smithay_client_toolkit::data_device_manager::data_device::DataDevice;
 use smithay_client_toolkit::data_device_manager::data_source::CopyPasteSource;
@@ -73,6 +74,7 @@ pub(super) struct WaylandState {
     pub(super) shm: Shm,
     pub(super) mem_pool: RefCell<SlotPool>,
     pub(super) kde_blur_manager: Option<OrgKdeKwinBlurManager>,
+    pub(super) activation: Option<ActivationState>,
 }
 
 impl WaylandState {
@@ -85,6 +87,8 @@ impl WaylandState {
             SubcompositorState::bind(compositor.wl_compositor().clone(), globals, qh)?;
 
         let blur_manager: Option<OrgKdeKwinBlurManager> = globals.bind(qh, 1..=1, GlobalData).ok();
+        let activation =
+            smithay_client_toolkit::activation::ActivationState::bind(globals, qh).ok();
         let wayland_state = WaylandState {
             registry: RegistryState::new(globals),
             output: OutputState::new(globals, qh),
@@ -117,6 +121,7 @@ impl WaylandState {
             shm,
             mem_pool: RefCell::new(mem_pool),
             kde_blur_manager: blur_manager,
+            activation,
         };
         Ok(wayland_state)
     }
@@ -179,3 +184,40 @@ delegate_dispatch!(WaylandState: [ZwpTextInputV3: TextInputData] => TextInputSta
 delegate_dispatch!(WaylandState: [ZwlrOutputManagerV1: GlobalData] => OutputManagerState);
 delegate_dispatch!(WaylandState: [ZwlrOutputHeadV1: OutputManagerData] => OutputManagerState);
 delegate_dispatch!(WaylandState: [ZwlrOutputModeV1: OutputManagerData] => OutputManagerState);
+
+pub struct WeztermActivationRequestData {
+    pub base: smithay_client_toolkit::activation::RequestData,
+    pub url: String,
+    pub handled: std::sync::Arc<std::sync::Mutex<bool>>,
+}
+
+impl smithay_client_toolkit::activation::RequestDataExt for WeztermActivationRequestData {
+    fn app_id(&self) -> Option<&str> {
+        self.base.app_id()
+    }
+
+    fn seat_and_serial(&self) -> Option<(&wayland_client::protocol::wl_seat::WlSeat, u32)> {
+        self.base.seat_and_serial()
+    }
+
+    fn surface(&self) -> Option<&wayland_client::protocol::wl_surface::WlSurface> {
+        self.base.surface()
+    }
+}
+
+impl smithay_client_toolkit::activation::ActivationHandler for WaylandState {
+    type RequestData = WeztermActivationRequestData;
+
+    fn new_token(&mut self, token: String, data: &Self::RequestData) {
+        let mut handled = data.handled.lock().unwrap();
+        if !*handled {
+            *handled = true;
+            log::info!("Received activation token: {}", token);
+            let mut env = std::collections::HashMap::new();
+            env.insert("XDG_ACTIVATION_TOKEN".to_string(), token);
+            wezterm_open_url::open_url_with_env(&data.url, &env);
+        }
+    }
+}
+
+smithay_client_toolkit::delegate_activation!(WaylandState, WeztermActivationRequestData);

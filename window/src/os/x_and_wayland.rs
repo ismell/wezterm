@@ -408,4 +408,12 @@ impl WindowOps for Window {
             Self::Wayland(w) => w.set_clipboard(clipboard, text),
         }
     }
+
+    fn open_url(&self, url: &str, interactive: bool) {
+        match self {
+            Self::X11(x) => x.open_url(url, interactive),
+            #[cfg(feature = "wayland")]
+            Self::Wayland(w) => w.open_url(url, interactive),
+        }
+    }
 }

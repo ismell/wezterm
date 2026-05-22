@@ -8,11 +8,35 @@ use luahelper::dynamic_to_lua_value;
 use mux::window::WindowId as MuxWindowId;
 use std::collections::HashMap;
 use wezterm_dynamic::ToDynamic;
+use window::WindowOps;
 
 pub mod guiwin;
 
 fn luaerr(err: anyhow::Error) -> mlua::Error {
     mlua::Error::external(err)
+}
+
+fn open_with<'lua>(lua: &'lua Lua, (url, app): (String, Option<String>)) -> mlua::Result<()> {
+    let active_window: mlua::Value = lua.named_registry_value("wezterm-active-window")?;
+    let mut handled = false;
+
+    if let mlua::Value::UserData(ud) = active_window {
+        if let Ok(gui_win) = ud.borrow::<guiwin::GuiWin>() {
+            if app.is_none() {
+                gui_win.window.open_url(&url, true);
+                handled = true;
+            }
+        }
+    }
+
+    if !handled {
+        if let Some(app) = app {
+            wezterm_open_url::open_with(&url, &app);
+        } else {
+            wezterm_open_url::open_url(&url);
+        }
+    }
+    Ok(())
 }
 
 pub fn register(lua: &Lua) -> anyhow::Result<()> {
@@ -97,6 +121,9 @@ pub fn register(lua: &Lua) -> anyhow::Result<()> {
             Ok(gpus)
         })?,
     )?;
+
+    let wezterm_mod = config::lua::get_or_create_module(lua, "wezterm")?;
+    wezterm_mod.set("open_with", lua.create_function(open_with)?)?;
 
     Ok(())
 }

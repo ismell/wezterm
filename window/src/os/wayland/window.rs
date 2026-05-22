@@ -519,6 +519,14 @@ impl WindowOps for WaylandWindow {
             Ok(())
         });
     }
+
+    fn open_url(&self, url: &str, interactive: bool) {
+        let url = url.to_owned();
+        WaylandConnection::with_window_inner(self.0, move |inner| {
+            inner.open_url(url, interactive)?;
+            Ok(())
+        });
+    }
 }
 #[derive(Default, Clone, Debug)]
 pub(crate) struct PendingEvent {
@@ -622,6 +630,73 @@ impl WaylandWindowInner {
                 .unwrap();
             let seat = pointer_data.pdata.seat();
             window.move_(seat, serial);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn open_url(&mut self, url: String, interactive: bool) -> anyhow::Result<()> {
+        if !interactive {
+            wezterm_open_url::open_url(&url);
+            return Ok(());
+        }
+
+        let conn = Connection::get().unwrap();
+        let wayland = conn.wayland();
+        let state = wayland.wayland_state.borrow();
+
+        log::info!("Wayland open_url called for {}", url);
+
+        if let Some(activation) = state.activation.as_ref() {
+            log::info!("Wayland activation protocol is available");
+            if let Some(pointer) = state.pointer.as_ref() {
+                let serial = *state.last_serial.borrow();
+                log::info!(
+                    "Pointer available, serial={}. Requesting activation token.",
+                    serial
+                );
+                let pointer_data = pointer
+                    .pointer()
+                    .data::<super::pointer::PointerUserData>()
+                    .unwrap();
+                let seat = pointer_data.pdata.seat();
+
+                let qh = wayland.event_queue.borrow().handle();
+
+                let handled = std::sync::Arc::new(std::sync::Mutex::new(false));
+                let handled_clone = std::sync::Arc::clone(&handled);
+                let url_clone = url.clone();
+
+                promise::spawn::spawn(async move {
+                    Timer::after(std::time::Duration::from_millis(500)).await;
+                    let mut handled = handled_clone.lock().unwrap();
+                    if !*handled {
+                        *handled = true;
+                        log::warn!(
+                            "Timeout waiting for activation token, falling back to default open"
+                        );
+                        wezterm_open_url::open_url(&url_clone);
+                    }
+                })
+                .detach();
+
+                let request_data = super::state::WeztermActivationRequestData {
+                    base: smithay_client_toolkit::activation::RequestData {
+                        app_id: None,
+                        seat_and_serial: Some((seat.clone(), serial)),
+                        surface: self.window.as_ref().map(|w| w.wl_surface().clone()),
+                    },
+                    url: url.clone(),
+                    handled,
+                };
+
+                activation.request_token_with_data(&qh, request_data);
+            } else {
+                log::warn!("Pointer not available, falling back to default open");
+                wezterm_open_url::open_url(&url);
+            }
+        } else {
+            log::warn!("Wayland activation protocol NOT available, falling back to default open");
+            wezterm_open_url::open_url(&url);
         }
         Ok(())
     }
