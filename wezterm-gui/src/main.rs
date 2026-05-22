@@ -899,6 +899,14 @@ fn notify_on_panic() {
 fn terminate_with_error_message(err: &str) -> ! {
     log::error!("{}; terminating", err);
     fatal_toast_notification("Wezterm Error", &err);
+
+    // Disable logging to avoid panics in thread_local access during destruction
+    env_bootstrap::ringlog::SHUTTING_DOWN.store(true, std::sync::atomic::Ordering::Relaxed);
+
+    // Clean up resources before exit to avoid panics in thread_local access during destruction
+    mux::Mux::shutdown();
+    crate::frontend::shutdown();
+
     std::process::exit(1);
 }
 

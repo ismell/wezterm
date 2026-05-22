@@ -18,6 +18,8 @@ lazy_static::lazy_static! {
     static ref RINGS: Mutex<Rings> = Mutex::new(Rings::new());
 }
 
+pub static SHUTTING_DOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 #[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub struct Entry {
     pub then: DateTime<Local>,
@@ -159,8 +161,15 @@ impl log::Log for Logger {
 
     fn log(&self, record: &Record) {
         if self.filter.matches(record) {
-            RINGS.lock().unwrap().log(record);
-            let ts = Local::now().format("%H:%M:%S%.3f").to_string();
+            let shutting_down = SHUTTING_DOWN.load(std::sync::atomic::Ordering::Relaxed);
+            if !shutting_down {
+                RINGS.lock().unwrap().log(record);
+            }
+            let ts = if shutting_down {
+                "SHUTDOWN".to_string()
+            } else {
+                Local::now().format("%H:%M:%S%.3f").to_string()
+            };
             let level = record.level().as_str();
             let target = record.target().to_string();
             let msg = record.args().to_string();
