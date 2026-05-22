@@ -3205,19 +3205,22 @@ impl TermWindow {
             ) -> anyhow::Result<()> {
                 let default_click = match lua {
                     Some(lua) => {
-                        let args = lua.pack_multi((window, pane, link.clone()))?;
-                        config::lua::emit_event(&lua, ("open-uri".to_string(), args))
+                        lua.set_named_registry_value("wezterm-active-window", window.clone())?;
+                        let args = lua.pack_multi((window.clone(), pane, link.clone()))?;
+                        let result = config::lua::emit_event(&lua, ("open-uri".to_string(), args))
                             .await
                             .map_err(|e| {
                                 log::error!("while processing open-uri event: {:#}", e);
                                 e
-                            })?
+                            });
+                        lua.set_named_registry_value("wezterm-active-window", mlua::Value::Nil)?;
+                        result?
                     }
                     None => true,
                 };
                 if default_click {
                     log::info!("clicking {}", link);
-                    wezterm_open_url::open_url(&link);
+                    window.window.open_url(&link, true);
                 }
                 Ok(())
             }

@@ -4,7 +4,13 @@
 
 #[cfg(not(windows))]
 pub fn open_url(url: &str) {
+    open_url_with_env(url, &std::collections::HashMap::new());
+}
+
+#[cfg(not(windows))]
+pub fn open_url_with_env(url: &str, env: &std::collections::HashMap<String, String>) {
     let url = url.to_string();
+    let env = env.clone();
     std::thread::spawn(move || {
         #[cfg(target_os = "macos")]
         let candidates: &[&[&str]] = &[&["/usr/bin/open", &url]];
@@ -21,6 +27,9 @@ pub fn open_url(url: &str) {
         for candidate in candidates {
             let mut cmd = std::process::Command::new(candidate[0]);
             cmd.args(&candidate[1..]);
+            for (k, v) in &env {
+                cmd.env(k, v);
+            }
 
             if let Ok(status) = cmd.status() {
                 if status.success() {

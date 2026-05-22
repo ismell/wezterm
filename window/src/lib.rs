@@ -352,6 +352,13 @@ pub trait WindowOps {
     ) -> anyhow::Result<Option<os::parameters::Parameters>> {
         Ok(None)
     }
+
+    /// Open a URL.
+    /// If `interactive` is true, the implementation should attempt to make
+    /// the opened application take focus.
+    fn open_url(&self, url: &str, _interactive: bool) {
+        wezterm_open_url::open_url(url);
+    }
 }
 
 #[derive(Debug, Clone, Default)]
